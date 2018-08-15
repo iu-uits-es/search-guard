@@ -177,6 +177,7 @@ public final class SearchGuardPlugin extends SearchGuardSSLPlugin implements Clu
     private final List<String> demoCertHashes = new ArrayList<String>(3);
     private SearchGuardFilter sgf;
     private ComplianceConfig complianceConfig;
+    private CompatConfig compatConfig;
     private IndexResolverReplacer irr;
 
     @Override
@@ -339,7 +340,7 @@ public final class SearchGuardPlugin extends SearchGuardSSLPlugin implements Clu
         if(!Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS)) {
             return "";
         }
-        
+
         if(!Files.isReadable(p)) {
             log.debug("Unreadable file "+p+" found");
             return "";
@@ -436,6 +437,10 @@ public final class SearchGuardPlugin extends SearchGuardSSLPlugin implements Clu
     @Override
     public UnaryOperator<RestHandler> getRestHandlerWrapper(final ThreadContext threadContext) {
 
+        if(!compatConfig.restAuthEnabled()) {
+            return null;
+        }
+
         if(client || disabled) {
             return (rh) -> rh;
         }
@@ -482,7 +487,7 @@ public final class SearchGuardPlugin extends SearchGuardSSLPlugin implements Clu
                 final ComplianceIndexingOperationListener ciol;
 
                 assert complianceConfig!=null:"compliance config must not be null here";
-                
+
                 if(complianceConfig.writeHistoryEnabledForIndex(indexModule.getIndex().getName())) {
                     ciol = ReflectionHelper.instantiateComplianceListener(complianceConfig, Objects.requireNonNull(auditLog));
                     indexModule.addIndexOperationListener(ciol);
@@ -512,15 +517,15 @@ public final class SearchGuardPlugin extends SearchGuardSSLPlugin implements Clu
                     public Weight doCache(Weight weight, QueryCachingPolicy policy) {
                         final Map<String, Set<String>> allowedFlsFields = (Map<String, Set<String>>) HeaderHelper.deserializeSafeFromHeader(threadPool.getThreadContext(),
                                 ConfigConstants.SG_FLS_FIELDS_HEADER);
-                        
+
                         if(evalMap(allowedFlsFields, index().getName()) != null) {
                             return weight;
                         } else {
                             return nodeCache.doCache(weight, policy);
                         }
-                        
+
                     }
-                    
+
                     private String evalMap(final Map<String,Set<String>> map, final String index) {
 
                         if (map == null) {
@@ -538,7 +543,7 @@ public final class SearchGuardPlugin extends SearchGuardSSLPlugin implements Clu
 
                         //regex
                         for(final String key: map.keySet()) {
-                            if(WildcardMatcher.containsWildcard(key) 
+                            if(WildcardMatcher.containsWildcard(key)
                                     && WildcardMatcher.match(key, index)) {
                                 return key;
                             }
@@ -549,9 +554,9 @@ public final class SearchGuardPlugin extends SearchGuardSSLPlugin implements Clu
 
                 });
             } else {
-                
+
                 assert complianceConfig==null:"compliance config must be null here";
-                
+
                 indexModule.setSearcherWrapper(indexService -> new SearchGuardIndexSearcherWrapper(indexService, settings, Objects
                         .requireNonNull(adminDns)));
             }
@@ -723,7 +728,7 @@ public final class SearchGuardPlugin extends SearchGuardSSLPlugin implements Clu
         auditLog = ReflectionHelper.instantiateAuditLog(settings, configPath, localClient, threadPool, resolver, clusterService);
         complianceConfig = dlsFlsAvailable && auditLog.getClass() != NullAuditLog.class?new ComplianceConfig(environment, Objects.requireNonNull(irr), auditLog):null;
         auditLog.setComplianceConfig(complianceConfig);
-        
+
         sslExceptionHandler = new AuditLogSslExceptionHandler(auditLog);
 
         final String DEFAULT_INTERCLUSTER_REQUEST_EVALUATOR_CLASS = DefaultInterClusterRequestEvaluator.class.getName();
@@ -750,10 +755,11 @@ public final class SearchGuardPlugin extends SearchGuardSSLPlugin implements Clu
         cr.subscribeOnChange(ConfigConstants.CONFIGNAME_CONFIG, backendRegistry);
         final ActionGroupHolder ah = new ActionGroupHolder(cr);
         evaluator = new PrivilegesEvaluator(clusterService, threadPool, cr, ah, resolver, auditLog, settings, privilegesInterceptor, cih);
-        
+
         final CompatConfig compatConfig = new CompatConfig(environment);
         cr.subscribeOnChange(ConfigConstants.CONFIGNAME_CONFIG, compatConfig);
-        
+        this.compatConfig = compatConfig;
+
         sgf = new SearchGuardFilter(evaluator, adminDns, dlsFlsValve, auditLog, threadPool, cs, complianceConfig, compatConfig);
 
 
@@ -845,16 +851,16 @@ public final class SearchGuardPlugin extends SearchGuardSSLPlugin implements Clu
         //TODO remove searchguard.tribe.clustername?
         //settings.add(Setting.simpleString(ConfigConstants.SEARCHGUARD_TRIBE_CLUSTERNAME, Property.NodeScope, Property.Filtered));
 
-        // SG6 - Audit        
+        // SG6 - Audit
         settings.add(Setting.simpleString(ConfigConstants.SEARCHGUARD_AUDIT_TYPE_DEFAULT, Property.NodeScope, Property.Filtered));
-        settings.add(Setting.groupSetting(ConfigConstants.SEARCHGUARD_AUDIT_CONFIG_ROUTES + ".", Property.NodeScope)); 
-        settings.add(Setting.groupSetting(ConfigConstants.SEARCHGUARD_AUDIT_CONFIG_ENDPOINTS + ".",  Property.NodeScope)); 
+        settings.add(Setting.groupSetting(ConfigConstants.SEARCHGUARD_AUDIT_CONFIG_ROUTES + ".", Property.NodeScope));
+        settings.add(Setting.groupSetting(ConfigConstants.SEARCHGUARD_AUDIT_CONFIG_ENDPOINTS + ".",  Property.NodeScope));
         settings.add(Setting.intSetting(ConfigConstants.SEARCHGUARD_AUDIT_THREADPOOL_SIZE, 10, Property.NodeScope, Property.Filtered));
         settings.add(Setting.intSetting(ConfigConstants.SEARCHGUARD_AUDIT_THREADPOOL_MAX_QUEUE_LEN, 100*1000, Property.NodeScope, Property.Filtered));
         settings.add(Setting.boolSetting(ConfigConstants.SEARCHGUARD_AUDIT_LOG_REQUEST_BODY, true, Property.NodeScope, Property.Filtered));
         settings.add(Setting.boolSetting(ConfigConstants.SEARCHGUARD_AUDIT_RESOLVE_INDICES, true, Property.NodeScope, Property.Filtered));
         settings.add(Setting.boolSetting(ConfigConstants.SEARCHGUARD_AUDIT_ENABLE_REST, true, Property.NodeScope, Property.Filtered));
-        settings.add(Setting.boolSetting(ConfigConstants.SEARCHGUARD_AUDIT_ENABLE_TRANSPORT, true, Property.NodeScope, Property.Filtered));        
+        settings.add(Setting.boolSetting(ConfigConstants.SEARCHGUARD_AUDIT_ENABLE_TRANSPORT, true, Property.NodeScope, Property.Filtered));
         final List<String> disabledCategories = new ArrayList<String>(2);
         disabledCategories.add("AUTHENTICATED");
         disabledCategories.add("GRANTED_PRIVILEGES");
@@ -867,7 +873,7 @@ public final class SearchGuardPlugin extends SearchGuardSSLPlugin implements Clu
         settings.add(Setting.boolSetting(ConfigConstants.SEARCHGUARD_AUDIT_RESOLVE_BULK_REQUESTS, false, Property.NodeScope, Property.Filtered));
         settings.add(Setting.boolSetting(ConfigConstants.SEARCHGUARD_AUDIT_EXCLUDE_SENSITIVE_HEADERS, true, Property.NodeScope, Property.Filtered));
 
-        
+
         // SG6 - Audit - Sink
         settings.add(Setting.simpleString(ConfigConstants.SEARCHGUARD_AUDIT_CONFIG_DEFAULT_PREFIX + ConfigConstants.SEARCHGUARD_AUDIT_ES_INDEX, Property.NodeScope, Property.Filtered));
         settings.add(Setting.simpleString(ConfigConstants.SEARCHGUARD_AUDIT_CONFIG_DEFAULT_PREFIX + ConfigConstants.SEARCHGUARD_AUDIT_ES_TYPE, Property.NodeScope, Property.Filtered));
@@ -894,13 +900,13 @@ public final class SearchGuardPlugin extends SearchGuardSSLPlugin implements Clu
         settings.add(Setting.simpleString(ConfigConstants.SEARCHGUARD_AUDIT_CONFIG_DEFAULT_PREFIX + ConfigConstants.SEARCHGUARD_AUDIT_WEBHOOK_URL, Property.NodeScope, Property.Filtered));
         settings.add(Setting.simpleString(ConfigConstants.SEARCHGUARD_AUDIT_CONFIG_DEFAULT_PREFIX + ConfigConstants.SEARCHGUARD_AUDIT_WEBHOOK_FORMAT, Property.NodeScope, Property.Filtered));
         settings.add(Setting.boolSetting(ConfigConstants.SEARCHGUARD_AUDIT_CONFIG_DEFAULT_PREFIX + ConfigConstants.SEARCHGUARD_AUDIT_WEBHOOK_SSL_VERIFY, true, Property.NodeScope, Property.Filtered));
-        settings.add(Setting.simpleString(ConfigConstants.SEARCHGUARD_AUDIT_CONFIG_DEFAULT_PREFIX + ConfigConstants.SEARCHGUARD_AUDIT_WEBHOOK_PEMTRUSTEDCAS_FILEPATH, Property.NodeScope, Property.Filtered));             
+        settings.add(Setting.simpleString(ConfigConstants.SEARCHGUARD_AUDIT_CONFIG_DEFAULT_PREFIX + ConfigConstants.SEARCHGUARD_AUDIT_WEBHOOK_PEMTRUSTEDCAS_FILEPATH, Property.NodeScope, Property.Filtered));
         settings.add(Setting.simpleString(ConfigConstants.SEARCHGUARD_AUDIT_CONFIG_DEFAULT_PREFIX + ConfigConstants.SEARCHGUARD_AUDIT_WEBHOOK_PEMTRUSTEDCAS_CONTENT, Property.NodeScope, Property.Filtered));
-        
+
         // Log4j
         settings.add(Setting.simpleString(ConfigConstants.SEARCHGUARD_AUDIT_CONFIG_DEFAULT_PREFIX + ConfigConstants.SEARCHGUARD_AUDIT_LOG4J_LOGGER_NAME, Property.NodeScope, Property.Filtered));
         settings.add(Setting.simpleString(ConfigConstants.SEARCHGUARD_AUDIT_CONFIG_DEFAULT_PREFIX + ConfigConstants.SEARCHGUARD_AUDIT_LOG4J_LEVEL, Property.NodeScope, Property.Filtered));
-        
+
 
         // Kerberos
         settings.add(Setting.simpleString(ConfigConstants.SEARCHGUARD_KERBEROS_KRB5_FILEPATH, Property.NodeScope, Property.Filtered));
@@ -930,7 +936,7 @@ public final class SearchGuardPlugin extends SearchGuardSSLPlugin implements Clu
         //compat
         settings.add(Setting.boolSetting(ConfigConstants.SEARCHGUARD_UNSUPPORTED_DISABLE_INTERTRANSPORT_AUTH_INITIALLY, false, Property.NodeScope, Property.Filtered));
         settings.add(Setting.boolSetting(ConfigConstants.SEARCHGUARD_UNSUPPORTED_DISABLE_REST_AUTH_INITIALLY, false, Property.NodeScope, Property.Filtered));
-        
+
         return settings;
     }
 
