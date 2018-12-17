@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2017 floragunn GmbH
+ * Copyright 2015-2018 floragunn GmbH
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,12 +21,14 @@ import static org.elasticsearch.rest.RestRequest.Method.GET;
 import static org.elasticsearch.rest.RestRequest.Method.POST;
 
 import java.io.IOException;
+import java.util.SortedMap;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.client.node.NodeClient;
+import org.elasticsearch.cluster.metadata.AliasOrIndex;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.transport.TransportAddress;
 import org.elasticsearch.common.util.concurrent.ThreadContext;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.rest.BaseRestHandler;
@@ -37,22 +39,28 @@ import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.threadpool.ThreadPool;
 
+import com.floragunn.searchguard.configuration.AdminDNs;
 import com.floragunn.searchguard.privileges.PrivilegesEvaluator;
 import com.floragunn.searchguard.support.ConfigConstants;
 import com.floragunn.searchguard.user.User;
 
-public class KibanaInfoAction extends BaseRestHandler {
+public class TenantInfoAction extends BaseRestHandler {
 
     private final Logger log = LogManager.getLogger(this.getClass());
     private final PrivilegesEvaluator evaluator;
     private final ThreadContext threadContext;
+    private final ClusterService clusterService;
+    private final AdminDNs adminDns;
 
-    public KibanaInfoAction(final Settings settings, final RestController controller, final PrivilegesEvaluator evaluator, final ThreadPool threadPool) {
+    public TenantInfoAction(final Settings settings, final RestController controller, 
+    		final PrivilegesEvaluator evaluator, final ThreadPool threadPool, final ClusterService clusterService, final AdminDNs adminDns) {
         super(settings);
         this.threadContext = threadPool.getThreadContext();
         this.evaluator = evaluator;
-        controller.registerHandler(GET, "/_searchguard/kibanainfo", this);
-        controller.registerHandler(POST, "/_searchguard/kibanainfo", this);       
+        this.clusterService = clusterService;
+        this.adminDns = adminDns;
+        controller.registerHandler(GET, "/_searchguard/tenantinfo", this);
+        controller.registerHandler(POST, "/_searchguard/tenantinfo", this);       
     }
 
     @Override
@@ -65,20 +73,30 @@ public class KibanaInfoAction extends BaseRestHandler {
                 BytesRestResponse response = null;
                 
                 try {
-                    
+
                     final User user = (User)threadContext.getTransient(ConfigConstants.SG_USER);
-                    final TransportAddress remoteAddress = (TransportAddress) threadContext.getTransient(ConfigConstants.SG_REMOTE_ADDRESS);
+                    
+                    //only allowed for admins or the kibanaserveruser
+                    if(user == null || 
+                    		(!user.getName().equals(evaluator.kibanaServerUsername()))
+                    		 && !adminDns.isAdmin(user)) {
+                        response = new BytesRestResponse(RestStatus.FORBIDDEN,"");
+                    } else {
 
-                    builder.startObject();
-                    builder.field("user_name", user==null?null:user.getName());
-                    builder.field("not_fail_on_forbidden_enabled", evaluator.notFailOnForbiddenEnabled());
-                    builder.field("kibana_mt_enabled", evaluator.multitenancyEnabled());
-                    builder.field("kibana_index", evaluator.kibanaIndex());
-                    builder.field("kibana_server_user", evaluator.kibanaServerUsername());
-                    //builder.field("kibana_index_readonly", evaluator.kibanaIndexReadonly(user, remoteAddress));
-                    builder.endObject();
+                    	builder.startObject();
+	
+                    	final SortedMap<String, AliasOrIndex> lookup = clusterService.state().metaData().getAliasAndIndexLookup();
+                    	for(final String indexOrAlias: lookup.keySet()) {
+                    		final String tenant = tenantNameForIndex(indexOrAlias);
+                    		if(tenant != null) {
+                    			builder.field(indexOrAlias, tenant);
+                    		}
+                    	}
 
-                    response = new BytesRestResponse(RestStatus.OK, builder);
+	                    builder.endObject();
+	
+	                    response = new BytesRestResponse(RestStatus.OK, builder);
+                    }
                 } catch (final Exception e1) {
                     log.error(e1.toString(),e1);
                     builder = channel.newBuilder(); //NOSONAR
@@ -96,10 +114,40 @@ public class KibanaInfoAction extends BaseRestHandler {
             }
         };
     }
+    
+    private String tenantNameForIndex(String index) {
+    	String[] indexParts;
+    	if(index == null 
+    			|| (indexParts = index.split("_")).length != 3
+    			) {
+    		return null;
+    	}
+    	
+    	
+    	if(!indexParts[0].equals(evaluator.kibanaIndex())) {
+    		return null;
+    	}
+    	
+    	try {
+			final int expectedHash = Integer.parseInt(indexParts[1]);
+			final String sanitizedName = indexParts[2];
+			
+			for(String tenant: evaluator.getAllConfiguredTenantNames()) {
+				if(tenant.hashCode() == expectedHash && sanitizedName.equals(tenant.toLowerCase().replaceAll("[^a-z0-9]+",""))) {
+					return tenant;
+				}
+			}
+
+			return "__private__";
+		} catch (NumberFormatException e) {
+			log.warn("Index "+index+" looks like a SG tenant index but we cannot parse the hashcode so we ignore it.");
+			return null;
+		}
+    }
 
     @Override
     public String getName() {
-        return "Kibana Info Action";
+        return "Tenant Info Action";
     }
     
     

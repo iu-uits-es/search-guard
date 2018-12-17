@@ -60,8 +60,8 @@ import com.floragunn.searchguard.compliance.ComplianceConfig;
 import com.floragunn.searchguard.configuration.AdminDNs;
 import com.floragunn.searchguard.configuration.CompatConfig;
 import com.floragunn.searchguard.configuration.DlsFlsRequestValve;
-import com.floragunn.searchguard.configuration.PrivilegesEvaluator;
-import com.floragunn.searchguard.configuration.PrivilegesEvaluator.PrivEvalResponse;
+import com.floragunn.searchguard.privileges.PrivilegesEvaluator;
+import com.floragunn.searchguard.privileges.PrivilegesEvaluatorResponse;
 import com.floragunn.searchguard.support.Base64Helper;
 import com.floragunn.searchguard.support.ConfigConstants;
 import com.floragunn.searchguard.support.HeaderHelper;
@@ -239,7 +239,7 @@ public class SearchGuardFilter implements ActionFilter {
                 log.trace("Evaluate permissions for user: {}", user.getName());
             }
 
-            final PrivEvalResponse pres = eval.evaluate(user, action, request, task);
+            final PrivilegesEvaluatorResponse pres = eval.evaluate(user, action, request, task);
             
             if (log.isDebugEnabled()) {
                 log.debug(pres);
@@ -247,7 +247,7 @@ public class SearchGuardFilter implements ActionFilter {
             
             if (pres.isAllowed()) {
                 auditLog.logGrantedPrivileges(action, request, task);
-                if(!dlsFlsValve.invoke(request, listener, pres.getAllowedFlsFields(), pres.getQueries())) {
+                if(!dlsFlsValve.invoke(request, listener, pres.getAllowedFlsFields(), pres.getMaskedFields(), pres.getQueries())) {
                     return;
                 }
                 chain.proceed(task, action, request, listener);
@@ -266,7 +266,7 @@ public class SearchGuardFilter implements ActionFilter {
     }
 
     private static boolean isUserAdmin(User user, final AdminDNs adminDns) {
-        if (user != null && adminDns.isAdmin(user.getName())) {
+        if (user != null && adminDns.isAdmin(user)) {
             return true;
         }
 

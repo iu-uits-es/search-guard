@@ -29,7 +29,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -80,15 +79,15 @@ import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.index.IndexNotFoundException;
 import org.elasticsearch.index.reindex.ReindexRequest;
-import org.elasticsearch.repositories.RepositoriesService;
-import org.elasticsearch.repositories.Repository;
-import org.elasticsearch.snapshots.SnapshotId;
 import org.elasticsearch.snapshots.SnapshotInfo;
 import org.elasticsearch.snapshots.SnapshotUtils;
 import org.elasticsearch.transport.RemoteClusterAware;
+import org.elasticsearch.transport.RemoteClusterService;
 import org.elasticsearch.transport.TransportRequest;
 
 import com.floragunn.searchguard.SearchGuardPlugin;
+import com.floragunn.searchguard.configuration.ClusterInfoHolder;
+import com.floragunn.searchguard.support.SnapshotRestoreHelper;
 import com.floragunn.searchguard.support.WildcardMatcher;
 import com.google.common.collect.Sets;
 
@@ -102,11 +101,13 @@ public final class IndexResolverReplacer {
     private final Logger log = LogManager.getLogger(this.getClass());
     private final IndexNameExpressionResolver resolver;
     private final ClusterService clusterService;
+    private final ClusterInfoHolder clusterInfoHolder;
 
-    public IndexResolverReplacer(IndexNameExpressionResolver resolver, ClusterService clusterService) {
+    public IndexResolverReplacer(IndexNameExpressionResolver resolver, ClusterService clusterService, ClusterInfoHolder clusterInfoHolder) {
         super();
         this.resolver = resolver;
         this.clusterService = clusterService;
+        this.clusterInfoHolder = clusterInfoHolder;
     }
 
     public static final boolean isAll(final String... requestedPatterns) {
@@ -356,6 +357,9 @@ public final class IndexResolverReplacer {
                         if(originalAsList.contains("*") || originalAsList.contains("_all")) {
                             return replacements;
                         }
+                        
+                        original = resolver.concreteIndexNames(clusterService.state(), IndicesOptions.lenientExpandOpen(), original);
+                        
                         final String[] retained = WildcardMatcher.getMatchAny(original, replacements).toArray(new String[0]);
                         return retained;
                     }
@@ -429,29 +433,38 @@ public final class IndexResolverReplacer {
 
         Boolean modified = Boolean.FALSE;
         String[] localIndices = request.indices();
+        
+        final RemoteClusterService remoteClusterService = SearchGuardPlugin.GuiceHolder.getRemoteClusterService();
 
         // handle CCS
         // TODO how to handle aliases with CCS??
-        if (request instanceof FieldCapabilitiesRequest || request instanceof SearchRequest) {
+        if (remoteClusterService.isCrossClusterSearchEnabled() && (request instanceof FieldCapabilitiesRequest || request instanceof SearchRequest)) {
             IndicesRequest.Replaceable searchRequest = request;
             final Map<String, OriginalIndices> remoteClusterIndices = SearchGuardPlugin.GuiceHolder.getRemoteClusterService().groupIndices(
                     searchRequest.indicesOptions(), searchRequest.indices(), idx -> resolver.hasIndexOrAlias(idx, clusterService.state()));
 
-            if (remoteClusterIndices.size() > 1) {
-                // check permissions?
-                if (log.isDebugEnabled()) {
-                    log.debug("CCS case, original indices: " + Arrays.toString(localIndices));
-                }
+            assert remoteClusterIndices.size() > 0:"Remote cluster size must not be zero";
+            
+            // check permissions?
+            if (log.isDebugEnabled()) {
+                log.debug("CCS case, original indices: " + Arrays.toString(localIndices));
+                log.debug("remoteClusterIndices ({}): {}", remoteClusterIndices.size(), remoteClusterIndices);
+            }
 
-                final OriginalIndices originalLocalIndices = remoteClusterIndices.get(RemoteClusterAware.LOCAL_CLUSTER_GROUP_KEY);
-                localIndices = originalLocalIndices.indices();
-                modified = Boolean.TRUE;
+            final OriginalIndices originalLocalIndices = remoteClusterIndices.get(RemoteClusterAware.LOCAL_CLUSTER_GROUP_KEY);
+            
+            if(originalLocalIndices == null) {
+            	localIndices = null;
+            } else {
+            	localIndices = originalLocalIndices.indices();
+            }
 
-                if (log.isDebugEnabled()) {
-                    log.debug("remoteClusterIndices keys" + remoteClusterIndices.keySet() + "//remoteClusterIndices "
-                            + remoteClusterIndices);
-                    log.debug("modified local indices: " + Arrays.toString(localIndices));
-                }
+            modified = Boolean.TRUE;
+
+            if (log.isDebugEnabled()) {
+                log.debug("remoteClusterIndices keys" + remoteClusterIndices.keySet() + "//remoteClusterIndices "
+                        + remoteClusterIndices);
+                log.debug("modified local indices: " + Arrays.toString(localIndices));
             }
         }
 
@@ -764,23 +777,13 @@ public final class IndexResolverReplacer {
                 ((PutMappingRequest) request).indices(newIndices);
             }
         } else if(request instanceof RestoreSnapshotRequest) {
+            
+                if(clusterInfoHolder.isLocalNodeElectedMaster() == Boolean.FALSE) {
+                    return true;
+                }      
+
                 final RestoreSnapshotRequest restoreRequest = (RestoreSnapshotRequest) request;
-                final RepositoriesService repositoriesService = Objects.requireNonNull(SearchGuardPlugin.GuiceHolder.getRepositoriesService(), "RepositoriesService not initialized");
-                //hack, because it seems not possible to access RepositoriesService from a non guice class
-                final Repository repository = repositoriesService.repository(restoreRequest.repository());
-                SnapshotInfo snapshotInfo = null;
-
-                for (final SnapshotId snapshotId : repository.getRepositoryData().getSnapshotIds()) {
-                    if (snapshotId.getName().equals(restoreRequest.snapshot())) {
-
-                        if(log.isDebugEnabled()) {
-                            log.debug("snapshot found: {} (UUID: {})", snapshotId.getName(), snapshotId.getUUID());
-                        }
-
-                        snapshotInfo = repository.getSnapshotInfo(snapshotId);
-                        break;
-                    }
-                }
+                final SnapshotInfo snapshotInfo = SnapshotRestoreHelper.getSnapshotInfo(restoreRequest);
 
                 if (snapshotInfo == null) {
                     log.warn("snapshot repository '" + restoreRequest.repository() + "', snapshot '" + restoreRequest.snapshot() + "' not found");

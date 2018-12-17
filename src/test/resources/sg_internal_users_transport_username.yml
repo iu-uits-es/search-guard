@@ -13,7 +13,7 @@ nagilum:
   hash: $2a$12$n5nubfWATfQjSYHiWtUyeOxMIxFInUHOAx8VMmGmxFNPGpaBmeB.m
   #password is: nagilum
   
-'CN=spock,OU=client,O=client,L=Test,C=DE':
+'client':
   #transport login only
   hash: '_impersonation_only_'
   roles:

@@ -93,9 +93,24 @@ sg_kibana_user:
         - INDEX
         - READ
         - DELETE
+    '?kibana_*':
+      '*':
+        - MANAGE
+        - INDEX
+        - READ
+        - DELETE
+    '?tasks':
+      '*':
+        - INDICES_ALL
+    '?management-beats':
+      '*':
+        - INDICES_ALL        
     '*':
       '*':
         - indices:data/read/field_caps*
+        - indices:data/read/xpack/rollup*
+        - indices:admin/mappings/get*
+        - indices:admin/get
 
 # For the kibana server
 sg_kibana_server:
@@ -105,11 +120,15 @@ sg_kibana_server:
       - CLUSTER_COMPOSITE_OPS
       - cluster:admin/xpack/monitoring*
       - indices:admin/template*
+      - indices:data/read/scroll*
   indices:
     '?kibana':
       '*':
         - INDICES_ALL
     '?kibana-6':
+      '*':
+        - INDICES_ALL
+    '?kibana_*':
       '*':
         - INDICES_ALL
     '?reporting*':
@@ -118,6 +137,15 @@ sg_kibana_server:
     '?monitoring*':
       '*':
         - INDICES_ALL
+    '?tasks':
+      '*':
+        - INDICES_ALL
+    '?management-beats*':
+      '*':
+        - INDICES_ALL
+    '*':
+      '*':
+        - "indices:admin/aliases*"
 
 # For logstash and beats
 sg_logstash:  
@@ -158,6 +186,10 @@ sg_own_index:
 ### X-Pack COMPATIBILITY
 sg_xp_monitoring:
   readonly: true
+  cluster:
+    - cluster:monitor/xpack/info
+    - cluster:monitor/main
+    - cluster:admin/xpack/monitoring/bulk
   indices:
     '?monitor*':
       '*':

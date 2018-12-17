@@ -63,13 +63,13 @@ import org.elasticsearch.action.admin.indices.get.GetIndexRequest;
 import org.elasticsearch.action.admin.indices.get.GetIndexRequest.Feature;
 import org.elasticsearch.action.admin.indices.get.GetIndexResponse;
 import org.elasticsearch.action.admin.indices.settings.put.UpdateSettingsRequest;
-import org.elasticsearch.action.admin.indices.settings.put.UpdateSettingsResponse;
 import org.elasticsearch.action.admin.indices.stats.IndicesStatsRequest;
 import org.elasticsearch.action.admin.indices.stats.IndicesStatsResponse;
 import org.elasticsearch.action.get.GetRequest;
 import org.elasticsearch.action.get.GetResponse;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.support.WriteRequest.RefreshPolicy;
+import org.elasticsearch.action.support.master.AcknowledgedResponse;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.client.transport.NoNodeAvailableException;
 import org.elasticsearch.client.transport.TransportClient;
@@ -124,13 +124,15 @@ public class SearchGuardAdmin {
         } catch (NoNodeAvailableException e) {
             System.out.println("ERR: Cannot connect to Elasticsearch. Please refer to elasticsearch logfile for more information");
             System.out.println("Trace:");
-            e.printStackTrace();
+            System.out.println(ExceptionsHelper.stackTrace(e));
+            System.out.println();
             System.exit(-1);
         } 
         catch (IndexNotFoundException e) {
             System.out.println("ERR: No Search Guard configuartion index found. Please execute sgadmin with different command line parameters");
             System.out.println("When you run it for the first time do not specify -us, -era, -dra or -rl");
             System.out.println("For more information please look here: http://docs.search-guard.com/v6/troubleshooting-sgadmin");
+            System.out.println();
             System.exit(-1);
         }
         catch (Exception e) {
@@ -141,12 +143,14 @@ public class SearchGuardAdmin {
 
                 System.out.println("ERR: You try to connect with a TLS node certificate instead of an admin client certificate");                
                 System.out.println("For more information please look here: http://docs.search-guard.com/v6/troubleshooting-sgadmin");
+                System.out.println();
                 System.exit(-1);
             }
             
             System.out.println("ERR: An unexpected "+e.getClass().getSimpleName()+" occured: "+e.getMessage());
             System.out.println("Trace:");
-            e.printStackTrace();
+            System.out.println(ExceptionsHelper.stackTrace(e));
+            System.out.println();
             System.exit(-1);
         }
     }
@@ -337,7 +341,7 @@ public class SearchGuardAdmin {
             
         }
         catch( ParseException exp ) {
-            System.err.println("ERR: Parsing failed.  Reason: " + exp.getMessage());
+            System.out.println("ERR: Parsing failed.  Reason: " + exp.getMessage());
             formatter.printHelp("sgadmin.sh", options, true);
             return;
         }
@@ -478,7 +482,7 @@ public class SearchGuardAdmin {
             if(updateSettings != null) { 
                 Settings indexSettings = Settings.builder().put("index.number_of_replicas", updateSettings).build();                
                 tc.execute(ConfigUpdateAction.INSTANCE, new ConfigUpdateRequest(new String[]{"config","roles","rolesmapping","internalusers","actiongroups"})).actionGet();                
-                final UpdateSettingsResponse response = tc.admin().indices().updateSettings((new UpdateSettingsRequest(index).settings(indexSettings))).actionGet();
+                final AcknowledgedResponse response = tc.admin().indices().updateSettings((new UpdateSettingsRequest(index).settings(indexSettings))).actionGet();
                 System.out.println("Reload config on all nodes");
                 System.out.println("Update number of replicas to "+(updateSettings) +" with result: "+response.isAcknowledged());
                 System.exit(response.isAcknowledged()?0:-1);
@@ -507,7 +511,7 @@ public class SearchGuardAdmin {
                         .put("index.auto_expand_replicas", replicaAutoExpand?"0-all":"false")
                         .build();                
                 tc.execute(ConfigUpdateAction.INSTANCE, new ConfigUpdateRequest(new String[]{"config","roles","rolesmapping","internalusers","actiongroups"})).actionGet();                
-                final UpdateSettingsResponse response = tc.admin().indices().updateSettings((new UpdateSettingsRequest(index).settings(indexSettings))).actionGet();
+                final AcknowledgedResponse response = tc.admin().indices().updateSettings((new UpdateSettingsRequest(index).settings(indexSettings))).actionGet();
                 System.out.println("Reload config on all nodes");
                 System.out.println("Auto-expand replicas "+(replicaAutoExpand?"enabled":"disabled"));
                 System.exit(response.isAcknowledged()?0:-1);

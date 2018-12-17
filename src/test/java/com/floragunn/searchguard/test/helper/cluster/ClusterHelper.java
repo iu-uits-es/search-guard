@@ -23,7 +23,9 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.SortedSet;
+import java.util.TreeSet;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import org.apache.commons.io.FileUtils;
@@ -42,17 +44,9 @@ import org.elasticsearch.cluster.node.DiscoveryNode.Role;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.transport.TransportAddress;
 import org.elasticsearch.common.unit.TimeValue;
-import org.elasticsearch.index.reindex.ReindexPlugin;
-import org.elasticsearch.join.ParentJoinPlugin;
 import org.elasticsearch.node.Node;
-import org.elasticsearch.node.NodeValidationException;
 import org.elasticsearch.node.PluginAwareNode;
-import org.elasticsearch.percolator.PercolatorPlugin;
-import org.elasticsearch.script.mustache.MustachePlugin;
-import org.elasticsearch.search.aggregations.matrix.MatrixAggregationPlugin;
-import org.elasticsearch.transport.Netty4Plugin;
 
-import com.floragunn.searchguard.SearchGuardPlugin;
 import com.floragunn.searchguard.test.NodeSettingsSupplier;
 import com.floragunn.searchguard.test.helper.cluster.ClusterConfiguration.NodeSettings;
 import com.floragunn.searchguard.test.helper.network.SocketUtils;
@@ -87,7 +81,7 @@ public final class ClusterHelper {
 	}
 	
 	
-	public final ClusterInfo startCluster(final NodeSettingsSupplier nodeSettingsSupplier, ClusterConfiguration clusterConfiguration, int timeout, Integer nodes)
+	public final synchronized ClusterInfo startCluster(final NodeSettingsSupplier nodeSettingsSupplier, ClusterConfiguration clusterConfiguration, int timeout, Integer nodes)
 			throws Exception {
 	    
 		if (!esNodes.isEmpty()) {
@@ -98,21 +92,39 @@ public final class ClusterHelper {
 
 		List<NodeSettings> internalNodeSettings = clusterConfiguration.getNodeSettings();
 		
-		SortedSet<Integer> tcpPorts = SocketUtils.findAvailableTcpPorts(internalNodeSettings.size());
-		Iterator<Integer> tcpPortsIt = tcpPorts.iterator();
+		final String forkno = System.getProperty("forkno");
+		int forkNumber = 1;
 		
-		SortedSet<Integer> httpPorts = SocketUtils.findAvailableTcpPorts(internalNodeSettings.size(), tcpPorts.last()+1, SocketUtils.PORT_RANGE_MAX);
-        Iterator<Integer> httpPortsIt = httpPorts.iterator();
+		if(forkno != null && forkno.length() > 0) {
+		    forkNumber = Integer.parseInt(forkno.split("_")[1]);
+		}
+	
+		final int min = SocketUtils.PORT_RANGE_MIN+(forkNumber*5000);
+		final int max = SocketUtils.PORT_RANGE_MIN+((forkNumber+1)*5000)-1;
+		
+		final SortedSet<Integer> freePorts = SocketUtils.findAvailableTcpPorts(internalNodeSettings.size()*2, min, max);
+		assert freePorts.size() == internalNodeSettings.size()*2;
+		final SortedSet<Integer> tcpPorts = new TreeSet<Integer>();
+		freePorts.stream().limit(internalNodeSettings.size()).forEach(el->tcpPorts.add(el));
+		final Iterator<Integer> tcpPortsIt = tcpPorts.iterator();
+		
+		final SortedSet<Integer> httpPorts = new TreeSet<Integer>();
+	    freePorts.stream().skip(internalNodeSettings.size()).limit(internalNodeSettings.size()).forEach(el->httpPorts.add(el));
+		final Iterator<Integer> httpPortsIt = httpPorts.iterator();
+		
+		System.out.println("tcpPorts: "+tcpPorts+"/httpPorts: "+httpPorts+" for ("+min+"-"+max+") fork "+forkNumber);
 		
 		final CountDownLatch latch = new CountDownLatch(internalNodeSettings.size());
-        
+		
+		final AtomicReference<Exception> err = new AtomicReference<Exception>();
+
 		for (int i = 0; i < internalNodeSettings.size(); i++) {
 			NodeSettings setting = internalNodeSettings.get(i);
 			
+			
 			PluginAwareNode node = new PluginAwareNode(setting.masterNode,
 					getMinimumNonSgNodeSettingsBuilder(i, setting.masterNode, setting.dataNode, setting.tribeNode, internalNodeSettings.size(), clusterConfiguration.getMasterNodes(), tcpPorts, tcpPortsIt.next(), httpPortsIt.next())
-							.put(nodeSettingsSupplier == null ? Settings.Builder.EMPTY_SETTINGS : nodeSettingsSupplier.get(i)).build(),
-					Netty4Plugin.class, SearchGuardPlugin.class, MatrixAggregationPlugin.class, MustachePlugin.class, ParentJoinPlugin.class, PercolatorPlugin.class, ReindexPlugin.class);
+							.put(nodeSettingsSupplier == null ? Settings.Builder.EMPTY_SETTINGS : nodeSettingsSupplier.get(i)).build(), setting.getPlugins());
 			System.out.println(node.settings());
 			
 			new Thread(new Runnable() {
@@ -122,9 +134,11 @@ public final class ClusterHelper {
                     try {
                         node.start();
                         latch.countDown();
-                    } catch (NodeValidationException e) {
-                        // TODO Auto-generated catch block
+                    } catch (Exception e) {
                         e.printStackTrace();
+                        log.error("Unable to start node: "+e);
+                        err.set(e);
+                        latch.countDown();
                     }
                 }
             }).start();
@@ -136,6 +150,10 @@ public final class ClusterHelper {
 		
 		
 		latch.await();
+		
+		if(err.get() != null) {
+		    throw new RuntimeException("Could not start all nodes "+err.get(),err.get());
+		}
 		
 		ClusterInfo cInfo = waitForCluster(ClusterHealthStatus.GREEN, TimeValue.timeValueSeconds(timeout), nodes == null?esNodes.size():nodes.intValue());
 		cInfo.numNodes = internalNodeSettings.size();

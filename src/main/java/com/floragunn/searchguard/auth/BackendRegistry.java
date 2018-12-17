@@ -31,11 +31,13 @@ import java.util.concurrent.TimeUnit;
 
 import javax.naming.InvalidNameException;
 import javax.naming.ldap.LdapName;
+import javax.naming.ldap.Rdn;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.ElasticsearchSecurityException;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.transport.TransportAddress;
 import org.elasticsearch.common.util.concurrent.ThreadContext;
 import org.elasticsearch.rest.BytesRestResponse;
 import org.elasticsearch.rest.RestChannel;
@@ -85,12 +87,14 @@ public class BackendRegistry implements ConfigurationChangeListener {
     private final InternalAuthenticationBackend iab;
     private final AuditLog auditLog;
     private final ThreadPool threadPool;
+    private final UserInjector userInjector;
     private final int ttlInMin;
     private Cache<AuthCredentials, User> userCache;
     private Cache<String, User> userCacheTransport;
     private Cache<AuthCredentials, User> authenticatedUserCacheTransport;
     private Cache<String, User> restImpersonationCache;
-
+    private volatile String transportUsernameAttribute = null; 
+    
     private void createCaches() {
         userCache = CacheBuilder.newBuilder()
                 .expireAfterWrite(ttlInMin, TimeUnit.MINUTES)
@@ -138,7 +142,8 @@ public class BackendRegistry implements ConfigurationChangeListener {
         this.iab = iab;
         this.auditLog = auditLog;
         this.threadPool = threadPool;
-
+        this.userInjector = new UserInjector(settings, threadPool, auditLog, xffResolver);
+        
         authImplMap.put("intern_c", InternalAuthenticationBackend.class.getName());
         authImplMap.put("intern_z", NoOpAuthorizationBackend.class.getName());
 
@@ -160,6 +165,7 @@ public class BackendRegistry implements ConfigurationChangeListener {
         authImplMap.put("saml_h", "com.floragunn.dlic.auth.http.saml.HTTPSamlAuthenticator");
 
         this.ttlInMin = settings.getAsInt(ConfigConstants.SEARCHGUARD_CACHE_TTL_MINUTES, 60);
+                
         createCaches();
     }
 
@@ -184,6 +190,7 @@ public class BackendRegistry implements ConfigurationChangeListener {
         transportAuthorizers.clear();
         invalidateCache();
         destroyDestroyables();
+        transportUsernameAttribute = settings.get("searchguard.dynamic.transport_userrname_attribute", null);
         anonymousAuthEnabled = settings.getAsBoolean("searchguard.dynamic.http.anonymous_auth_enabled", false)
                 && !esSettings.getAsBoolean(ConfigConstants.SEARCHGUARD_COMPLIANCE_DISABLE_ANONYMOUS_AUTHENTICATION, false);
 
@@ -289,8 +296,13 @@ public class BackendRegistry implements ConfigurationChangeListener {
 
     public User authenticate(final TransportRequest request, final String sslPrincipal, final Task task, final String action) {
 
-        final User origPKIUser = new User(sslPrincipal);
-        if(adminDns.isAdmin(origPKIUser.getName())) {
+    	  if(log.isDebugEnabled() && request.remoteAddress() != null) {
+    		  log.debug("Transport authentication request from {}", request.remoteAddress());
+    	  }
+        
+        User origPKIUser = new User(sslPrincipal);
+        
+        if(adminDns.isAdmin(origPKIUser)) {
             auditLog.logSucceededLogin(origPKIUser.getName(), true, null, request, action, task);
             return origPKIUser;
         }
@@ -317,6 +329,7 @@ public class BackendRegistry implements ConfigurationChangeListener {
                 //no credentials submitted
                 //impersonation possible
                 impersonatedTransportUser = impersonate(request, origPKIUser);
+                origPKIUser = resolveTransportUsernameAttribute(origPKIUser);
                 authenticatedUser = checkExistsAndAuthz(userCacheTransport, impersonatedTransportUser==null?origPKIUser:impersonatedTransportUser, authDomain.getBackend(), transportAuthorizers);
             } else {
                  //auth credentials submitted
@@ -331,7 +344,7 @@ public class BackendRegistry implements ConfigurationChangeListener {
                 continue;
             }
 
-            if(adminDns.isAdmin(authenticatedUser.getName())) {
+            if(adminDns.isAdmin(authenticatedUser)) {
                 log.error("Cannot authenticate user because admin user is not permitted to login");
                 auditLog.logFailedLogin(authenticatedUser.getName(), true, null, request, task);
                 return null;
@@ -353,8 +366,8 @@ public class BackendRegistry implements ConfigurationChangeListener {
         } else {
             auditLog.logFailedLogin(creds.getUsername(), false, null, request, task);
         }
-
-        log.warn("Transport authentication finally failed for {}", creds == null ? impersonatedTransportUser==null?origPKIUser.getName():impersonatedTransportUser.getName():creds.getUsername());
+ 
+        log.warn("Transport authentication finally failed for {} from {}", creds == null ? impersonatedTransportUser==null?origPKIUser.getName():impersonatedTransportUser.getName():creds.getUsername(), request.remoteAddress());
 
         return null;
     }
@@ -371,20 +384,31 @@ public class BackendRegistry implements ConfigurationChangeListener {
 
         final String sslPrincipal = (String) threadPool.getThreadContext().getTransient(ConfigConstants.SG_SSL_PRINCIPAL);
 
-        if(adminDns.isAdmin(sslPrincipal)) {
+        if(adminDns.isAdminDN(sslPrincipal)) {
             //PKI authenticated REST call
             threadPool.getThreadContext().putTransient(ConfigConstants.SG_USER, new User(sslPrincipal));
             auditLog.logSucceededLogin(sslPrincipal, true, null, request);
             return true;
         }
 
+        if (userInjector.injectUser(request)) {
+            // ThreadContext injected user
+            return true;
+        }
+        
         if (!isInitialized()) {
             log.error("Not yet initialized (you may need to run sgadmin)");
             channel.sendResponse(new BytesRestResponse(RestStatus.SERVICE_UNAVAILABLE, "Search Guard not initialized (SG11). See http://docs.search-guard.com/v6/sgadmin"));
             return false;
         }
+        
+        final TransportAddress remoteAddress = xffResolver.resolve(request);
+        
+        if(log.isDebugEnabled()) {
+    		log.debug("Rest authentication request from {} [original: {}]", remoteAddress, request.getRemoteAddress());
+    	}
 
-        threadContext.putTransient(ConfigConstants.SG_REMOTE_ADDRESS, xffResolver.resolve(request));
+        threadContext.putTransient(ConfigConstants.SG_REMOTE_ADDRESS, remoteAddress);
 
         boolean authenticated = false;
 
@@ -457,7 +481,7 @@ public class BackendRegistry implements ConfigurationChangeListener {
                 continue;
             }
 
-            if(adminDns.isAdmin(authenticatedUser.getName())) {
+            if(adminDns.isAdmin(authenticatedUser)) {
                 log.error("Cannot authenticate user because admin user is not permitted to login via HTTP");
                 auditLog.logFailedLogin(authenticatedUser.getName(), true, null, request);
                 channel.sendResponse(new BytesRestResponse(RestStatus.FORBIDDEN, "Cannot authenticate user because admin user is not permitted to login via HTTP"));
@@ -472,16 +496,16 @@ public class BackendRegistry implements ConfigurationChangeListener {
             }
 
             authenticatedUser.setRequestedTenant(tenant);
-            final User impersonatedUser = impersonate(request, authenticatedUser, authDomain.getBackend());
-            threadContext.putTransient(ConfigConstants.SG_USER, impersonatedUser==null?authenticatedUser:impersonatedUser);
-
-            auditLog.logSucceededLogin((impersonatedUser==null?authenticatedUser:impersonatedUser).getName(), false, authenticatedUser.getName(), request);
             authenticated = true;
             break;
         }//end looping auth domains
 
 
-        if(!authenticated) {
+        if(authenticated) {
+            final User impersonatedUser = impersonate(request, authenticatedUser);
+            threadContext.putTransient(ConfigConstants.SG_USER, impersonatedUser==null?authenticatedUser:impersonatedUser);
+            auditLog.logSucceededLogin((impersonatedUser==null?authenticatedUser:impersonatedUser).getName(), false, authenticatedUser.getName(), request);
+        } else {
             if(log.isDebugEnabled()) {
                 log.debug("User still not authenticated after checking {} auth domains", restAuthDomains.size());
             }
@@ -506,13 +530,13 @@ public class BackendRegistry implements ConfigurationChangeListener {
                         log.debug("Rerequest {} failed", firstChallengingHttpAuthenticator.getClass());
                     }
 
-                    log.warn("Authentication finally failed for {}", authCredenetials == null ? null:authCredenetials.getUsername());
+                    log.warn("Authentication finally failed for {} from {}", authCredenetials == null ? null:authCredenetials.getUsername(), remoteAddress);
                     auditLog.logFailedLogin(authCredenetials == null ? null:authCredenetials.getUsername(), false, null, request);
                     return false;
                 }
             }
 
-            log.warn("Authentication finally failed for {}", authCredenetials == null ? null:authCredenetials.getUsername());
+            log.warn("Authentication finally failed for {} from {}", authCredenetials == null ? null:authCredenetials.getUsername(), remoteAddress);
             auditLog.logFailedLogin(authCredenetials == null ? null:authCredenetials.getUsername(), false, null, request);
             channel.sendResponse(new BytesRestResponse(RestStatus.UNAUTHORIZED, "Authentication finally failed"));
             return false;
@@ -636,7 +660,7 @@ public class BackendRegistry implements ConfigurationChangeListener {
 
         User aU = origPKIuser;
 
-        if (adminDns.isAdmin(impersonatedUser)) {
+        if (adminDns.isAdminDN(impersonatedUser)) {
             throw new ElasticsearchSecurityException("'"+origPKIuser.getName() + "' is not allowed to impersonate as an adminuser  '" + impersonatedUser+"'");
         }
 
@@ -657,7 +681,7 @@ public class BackendRegistry implements ConfigurationChangeListener {
         return aU;
     }
 
-    private User impersonate(final RestRequest request, final User originalUser, final AuthenticationBackend authenticationBackend) throws ElasticsearchSecurityException {
+    private User impersonate(final RestRequest request, final User originalUser) throws ElasticsearchSecurityException {
 
         final String impersonatedUserHeader = request.header("sg_impersonate_as");
 
@@ -669,7 +693,7 @@ public class BackendRegistry implements ConfigurationChangeListener {
             throw new ElasticsearchSecurityException("Could not check for impersonation because Search Guard is not yet initialized");
         }
 
-        if (adminDns.isAdmin(impersonatedUserHeader)) {
+        if (adminDns.isAdminDN(impersonatedUserHeader)) {
             throw new ElasticsearchSecurityException("It is not allowed to impersonate as an adminuser  '" + impersonatedUserHeader + "'",
                     RestStatus.FORBIDDEN);
         }
@@ -678,22 +702,28 @@ public class BackendRegistry implements ConfigurationChangeListener {
             throw new ElasticsearchSecurityException("'" + originalUser.getName() + "' is not allowed to impersonate as '" + impersonatedUserHeader
                     + "'", RestStatus.FORBIDDEN);
         } else {
+            //loop over all http/rest auth domains
+            for (final AuthDomain authDomain: restAuthDomains) {
+                final AuthenticationBackend authenticationBackend = authDomain.getBackend();
+                final User impersonatedUser = checkExistsAndAuthz(restImpersonationCache, new User(impersonatedUserHeader), authenticationBackend, restAuthorizers);
 
-            final User impersonatedUser = checkExistsAndAuthz(restImpersonationCache, new User(impersonatedUserHeader), authenticationBackend, restAuthorizers);
+                if(impersonatedUser == null) {
+                    log.debug("Unable to impersonate rest user from '{}' to '{}' because the impersonated user does not exists in {}, try next ...", originalUser.getName(), impersonatedUserHeader, authenticationBackend.getType());
+                    continue;
+                }
 
-            if(impersonatedUser == null) {
-                log.debug("Unable to impersonate rest user from '{}' to '{}' because the impersonated user does not exists in {}", originalUser.getName(), impersonatedUserHeader, authenticationBackend.getType());
-                throw new ElasticsearchSecurityException("No such user:" + impersonatedUserHeader, RestStatus.FORBIDDEN);
+                if (log.isDebugEnabled()) {
+                    log.debug("Impersonate rest user from '{}' to '{}'", originalUser.getName(), impersonatedUserHeader);
+                }
+                return impersonatedUser;
             }
 
-            if (log.isDebugEnabled()) {
-                log.debug("Impersonate rest user from '{}' to '{}'", originalUser.getName(), impersonatedUserHeader);
-            }
-            return impersonatedUser;
+            log.debug("Unable to impersonate rest user from '{}' to '{}' because the impersonated user does not exists", originalUser.getName(), impersonatedUserHeader);
+            throw new ElasticsearchSecurityException("No such user:" + impersonatedUserHeader, RestStatus.FORBIDDEN);
         }
 
     }
-
+        
     private <T> T newInstance(final String clazzOrShortcut, String type, final Settings settings, final Path configPath) {
 
         String clazz = clazzOrShortcut;
@@ -722,5 +752,23 @@ public class BackendRegistry implements ConfigurationChangeListener {
     	}
     	
     	this.destroyableComponents.clear();
+    }
+    
+    private User resolveTransportUsernameAttribute(User pkiUser) {
+    	//#547
+        if(transportUsernameAttribute != null && !transportUsernameAttribute.isEmpty()) {
+	    	try {
+				final LdapName sslPrincipalAsLdapName = new LdapName(pkiUser.getName());
+				for(final Rdn rdn: sslPrincipalAsLdapName.getRdns()) {
+					if(rdn.getType().equals(transportUsernameAttribute)) {
+						return new User((String) rdn.getValue());
+					}
+				}
+			} catch (InvalidNameException e) {
+				//cannot happen
+			}
+        }
+        
+        return pkiUser;
     }
 }

@@ -41,7 +41,9 @@ import com.floragunn.searchguard.configuration.ConfigurationRepository;
 import com.floragunn.searchguard.resolver.IndexResolverReplacer.Resolved;
 import com.floragunn.searchguard.support.WildcardMatcher;
 import com.floragunn.searchguard.user.User;
+import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 
 public class ConfigModel {
@@ -295,6 +297,7 @@ public class ConfigModel {
 
         }
         
+        //kibana special only
         public Set<String> getAllPermittedIndices(User user, String[] actions, IndexNameExpressionResolver resolver, ClusterService cs) {
             Set<String> retVal = new HashSet<>();
             for(SgRole sgr: roles) {
@@ -355,7 +358,7 @@ public class ConfigModel {
         }
 
         //get indices which are permitted for the given types and actions
-        //dnfof only
+        //dnfof + kibana special only
         private Set<String> getAllResolvedPermittedIndices(Resolved resolved, User user, String[] actions, IndexNameExpressionResolver resolver, ClusterService cs) {
 
             final Set<String> retVal = new HashSet<>();
@@ -378,8 +381,14 @@ public class ConfigModel {
                        WildcardMatcher.wildcardRetainInSet(wanted, permitted);
                        res.addAll(wanted);
                    } else {
-                       //we want all indices so just return whats permitted
-                       res.addAll(Arrays.asList(resolver.concreteIndexNames(cs.state(), IndicesOptions.lenientExpandOpen(), permitted)));
+                       //we want all indices so just return what's permitted
+                       
+                       //#557
+                       final String[] allIndices = resolver.concreteIndexNames(cs.state(), IndicesOptions.lenientExpandOpen(), "*");
+                       final Set<String> wanted = new HashSet<>(Arrays.asList(allIndices));
+                       WildcardMatcher.wildcardRetainInSet(wanted, permitted);
+                       res.addAll(wanted);
+                       //res.addAll(Arrays.asList(resolver.concreteIndexNames(cs.state(), IndicesOptions.lenientExpandOpen(), permitted)));
                    }
                    retVal.addAll(res);
                }
@@ -594,7 +603,7 @@ public class ConfigModel {
                 }
             }
             
-            if(resolved == null) {
+            if(resolved == null && !unresolved.isEmpty()) {
                 resolved = resolver.concreteIndexNames(cs.state(), IndicesOptions.lenientExpandOpen(), unresolved);
             }
             if(resolved == null || resolved.length == 0) {
@@ -747,6 +756,7 @@ public class ConfigModel {
         }
         
         orig = orig.replace("${user.name}", user.getName()).replace("${user_name}", user.getName());
+        orig = replaceRoles(orig, user);
         for(Entry<String, String> entry: user.getCustomAttributesMap().entrySet()) {
             if(entry == null || entry.getKey() == null || entry.getValue() == null) {
                 continue;
@@ -755,6 +765,21 @@ public class ConfigModel {
             orig = orig.replace("${"+entry.getKey().replace('.', '_')+"}", entry.getValue());
         }
         return orig;
+    }
+    
+    private static String replaceRoles(final String orig, final User user) {
+        String retVal = orig;
+        if(orig.contains("${user.roles}") || orig.contains("${user_roles}")) {
+            final String commaSeparatedRoles = toQuotedCommaSeparatedString(user.getRoles());
+            retVal = orig.replace("${user.roles}", commaSeparatedRoles).replace("${user_roles}", commaSeparatedRoles);
+        }
+        return retVal;
+    }
+    
+    private static String toQuotedCommaSeparatedString(final Set<String> roles) {
+        return Joiner.on(',').join(Iterables.transform(roles, s->{
+            return new StringBuilder(s.length()+2).append('"').append(s).append('"').toString();
+        }));
     }
     
     private static boolean impliesTypePerm(Set<IndexPattern> ipatterns, Resolved resolved, User user, String[] actions, IndexNameExpressionResolver resolver, ClusterService cs) {

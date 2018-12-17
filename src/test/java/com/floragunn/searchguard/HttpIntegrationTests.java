@@ -506,5 +506,166 @@ public class HttpIntegrationTests extends SingleClusterTest {
             
             
         }
+    
+    @Test
+    public void testBulk() throws Exception {
+        final Settings settings = Settings.builder()
+                .put(ConfigConstants.SEARCHGUARD_ROLES_MAPPING_RESOLUTION, "BOTH")
+                .build();
+        setup(Settings.EMPTY, new DynamicSgConfig().setSgRoles("sg_roles_bulk.yml"), settings);
+        final RestHelper rh = nonSslRestHelper();
+    
+        String bulkBody = 
+                "{ \"index\" : { \"_index\" : \"test\", \"_type\" : \"type1\", \"_id\" : \"1\" } }"+System.lineSeparator()+
+                "{ \"field1\" : \"value1\" }" +System.lineSeparator()+
+                "{ \"index\" : { \"_index\" : \"test\", \"_type\" : \"type1\", \"_id\" : \"2\" } }"+System.lineSeparator()+
+                "{ \"field2\" : \"value2\" }"+System.lineSeparator();
+    
+        HttpResponse res = rh.executePostRequest("_bulk", bulkBody, encodeBasicHeader("bulk", "nagilum"));
+        System.out.println(res.getBody());
+        Assert.assertEquals(HttpStatus.SC_OK, res.getStatusCode());  
+        Assert.assertTrue(res.getBody().contains("\"errors\":false"));
+        Assert.assertTrue(res.getBody().contains("\"status\":201"));  
+    }
+    
+    @Test
+    public void test557() throws Exception {
+        final Settings settings = Settings.builder()
+                .put(ConfigConstants.SEARCHGUARD_ROLES_MAPPING_RESOLUTION, "BOTH")
+                .build();
+        setup(Settings.EMPTY, new DynamicSgConfig(), settings);
+        
+        try (TransportClient tc = getInternalTransportClient(this.clusterInfo, Settings.EMPTY)) {
+            
+            tc.admin().indices().create(new CreateIndexRequest("copysf")).actionGet();
+            
+            tc.index(new IndexRequest("vulcangov").type("kolinahr").setRefreshPolicy(RefreshPolicy.IMMEDIATE).source("{\"content\":1}", XContentType.JSON)).actionGet();
+             
+            tc.index(new IndexRequest("starfleet").type("ships").setRefreshPolicy(RefreshPolicy.IMMEDIATE).source("{\"content\":1}", XContentType.JSON)).actionGet();
+             
+            tc.index(new IndexRequest("starfleet_academy").type("students").setRefreshPolicy(RefreshPolicy.IMMEDIATE).source("{\"content\":1}", XContentType.JSON)).actionGet();
+            
+        }
+        
+        final RestHelper rh = nonSslRestHelper();
+
+        HttpResponse res = rh.executePostRequest("/*/_search", "{\"size\":0,\"aggs\":{\"indices\":{\"terms\":{\"field\":\"_index\",\"size\":10}}}}", encodeBasicHeader("nagilum", "nagilum"));
+        System.out.println(res.getBody());
+        Assert.assertEquals(HttpStatus.SC_OK, res.getStatusCode());  
+        Assert.assertTrue(res.getBody().contains("starfleet_academy"));
+        res = rh.executePostRequest("/*/_search", "{\"size\":0,\"aggs\":{\"indices\":{\"terms\":{\"field\":\"_index\",\"size\":10}}}}", encodeBasicHeader("557", "nagilum"));
+        System.out.println(res.getBody());
+        Assert.assertEquals(HttpStatus.SC_OK, res.getStatusCode());  
+        Assert.assertTrue(res.getBody().contains("starfleet_academy"));  
+    }
+    
+    @Test
+    public void testITT1635() throws Exception {
+        final Settings settings = Settings.builder()
+                .put(ConfigConstants.SEARCHGUARD_ROLES_MAPPING_RESOLUTION, "BOTH")
+                .build();
+        setup(Settings.EMPTY, new DynamicSgConfig().setSgConfig("sg_config_dnfof.yml").setSgRoles("sg_roles_itt1635.yml"), settings);
+        
+        try (TransportClient tc = getInternalTransportClient(this.clusterInfo, Settings.EMPTY)) {
+                        
+            tc.index(new IndexRequest("esb-prod-1").type("doc").setRefreshPolicy(RefreshPolicy.IMMEDIATE).source("{\"content\":1}", XContentType.JSON)).actionGet();
+            tc.index(new IndexRequest("esb-prod-2").type("doc").setRefreshPolicy(RefreshPolicy.IMMEDIATE).source("{\"content\":2}", XContentType.JSON)).actionGet();            
+            tc.index(new IndexRequest("esb-prod-3").type("doc").setRefreshPolicy(RefreshPolicy.IMMEDIATE).source("{\"content\":3}", XContentType.JSON)).actionGet();
+            tc.index(new IndexRequest("esb-prod-4").type("doc").setRefreshPolicy(RefreshPolicy.IMMEDIATE).source("{\"content\":4}", XContentType.JSON)).actionGet();
+            tc.index(new IndexRequest("esb-prod-5").type("doc").setRefreshPolicy(RefreshPolicy.IMMEDIATE).source("{\"content\":5}", XContentType.JSON)).actionGet();
+
+            tc.admin().indices().aliases(new IndicesAliasesRequest().addAliasAction(AliasActions.add().indices("esb-prod-1","esb-prod-2","esb-prod-3","esb-prod-4","esb-prod-5").alias("esb-prod-all"))).actionGet();
+            tc.admin().indices().aliases(new IndicesAliasesRequest().addAliasAction(AliasActions.add().indices("esb-prod-1").alias("esb-alias-1"))).actionGet();
+            tc.admin().indices().aliases(new IndicesAliasesRequest().addAliasAction(AliasActions.add().indices("esb-prod-2").alias("esb-alias-2"))).actionGet();
+            tc.admin().indices().aliases(new IndicesAliasesRequest().addAliasAction(AliasActions.add().indices("esb-prod-3").alias("esb-alias-3"))).actionGet();
+            tc.admin().indices().aliases(new IndicesAliasesRequest().addAliasAction(AliasActions.add().indices("esb-prod-4").alias("esb-alias-4"))).actionGet();
+            tc.admin().indices().aliases(new IndicesAliasesRequest().addAliasAction(AliasActions.add().indices("esb-prod-5").alias("esb-alias-5"))).actionGet();
+
+        }
+        
+        final RestHelper rh = nonSslRestHelper();
+
+        System.out.println("###1");
+        HttpResponse res = rh.executeGetRequest("/esb-prod-*/_search?pretty", encodeBasicHeader("itt1635", "nagilum"));
+        Assert.assertEquals(HttpStatus.SC_OK, res.getStatusCode());  
+        System.out.println("###2");
+        res = rh.executeGetRequest("/esb-alias-*/_search?pretty", encodeBasicHeader("itt1635", "nagilum"));
+        Assert.assertEquals(HttpStatus.SC_OK, res.getStatusCode());
+        System.out.println("###3");
+        res = rh.executeGetRequest("/esb-prod-all/_search?pretty", encodeBasicHeader("itt1635", "nagilum"));
+        Assert.assertEquals(HttpStatus.SC_OK, res.getStatusCode());
+    }
+    
+    @Test
+    public void testTenantInfo() throws Exception {
+        final Settings settings = Settings.builder()
+                .build();
+        setup(Settings.EMPTY, new DynamicSgConfig(), settings);
+        
+        /*
+         
+            [admin_1, praxisrw, abcdef_2_2, kltentro, praxisro, kltentrw]
+			admin_1==.kibana_-1139640511_admin1
+			praxisrw==.kibana_-1386441176_praxisrw
+			abcdef_2_2==.kibana_-634608247_abcdef22
+			kltentro==.kibana_-2014056171_kltentro
+			praxisro==.kibana_-1386441184_praxisro
+			kltentrw==.kibana_-2014056163_kltentrw
+         
+         */
+        
+        try (TransportClient tc = getInternalTransportClient(this.clusterInfo, Settings.EMPTY)) {
+                        
+            tc.index(new IndexRequest(".kibana-6").type("doc").setRefreshPolicy(RefreshPolicy.IMMEDIATE).source("{\"content\":2}", XContentType.JSON)).actionGet();            
+            tc.index(new IndexRequest(".kibana_-1139640511_admin1").type("doc").setRefreshPolicy(RefreshPolicy.IMMEDIATE).source("{\"content\":3}", XContentType.JSON)).actionGet();
+            tc.index(new IndexRequest(".kibana_-1386441176_praxisrw").type("doc").setRefreshPolicy(RefreshPolicy.IMMEDIATE).source("{\"content\":3}", XContentType.JSON)).actionGet();
+            tc.index(new IndexRequest(".kibana_-634608247_abcdef22").type("doc").setRefreshPolicy(RefreshPolicy.IMMEDIATE).source("{\"content\":3}", XContentType.JSON)).actionGet();
+            tc.index(new IndexRequest(".kibana_-12345_123456").type("doc").setRefreshPolicy(RefreshPolicy.IMMEDIATE).source("{\"content\":3}", XContentType.JSON)).actionGet();
+            tc.index(new IndexRequest(".kibana2_-12345_123456").type("doc").setRefreshPolicy(RefreshPolicy.IMMEDIATE).source("{\"content\":3}", XContentType.JSON)).actionGet();
+            tc.index(new IndexRequest(".kibana_9876_xxx_ccc").type("doc").setRefreshPolicy(RefreshPolicy.IMMEDIATE).source("{\"content\":3}", XContentType.JSON)).actionGet();
+            tc.index(new IndexRequest(".kibana_fff_eee").type("doc").setRefreshPolicy(RefreshPolicy.IMMEDIATE).source("{\"content\":3}", XContentType.JSON)).actionGet();
+
+            
+            tc.index(new IndexRequest("esb-prod-5").type("doc").setRefreshPolicy(RefreshPolicy.IMMEDIATE).source("{\"content\":5}", XContentType.JSON)).actionGet();
+
+            tc.admin().indices().aliases(new IndicesAliasesRequest().addAliasAction(AliasActions.add().indices(".kibana-6").alias(".kibana"))).actionGet();
+            tc.admin().indices().aliases(new IndicesAliasesRequest().addAliasAction(AliasActions.add().indices("esb-prod-5").alias(".kibana_-2014056163_kltentrw"))).actionGet();
+            tc.admin().indices().aliases(new IndicesAliasesRequest().addAliasAction(AliasActions.add().indices("esb-prod-5").alias("esb-alias-5"))).actionGet();
+
+        }
+        
+        final RestHelper rh = nonSslRestHelper();
+
+        HttpResponse res = rh.executeGetRequest("/_searchguard/tenantinfo?pretty", encodeBasicHeader("itt1635", "nagilum"));
+        Assert.assertEquals(HttpStatus.SC_FORBIDDEN, res.getStatusCode());  
+
+        res = rh.executeGetRequest("/_searchguard/tenantinfo?pretty", encodeBasicHeader("kibanaserver", "kibanaserver"));
+        System.out.println(res.getBody());
+        Assert.assertEquals(HttpStatus.SC_OK, res.getStatusCode());
+        Assert.assertTrue(res.getBody().contains("\".kibana_-1139640511_admin1\" : \"admin_1\""));
+        Assert.assertTrue(res.getBody().contains("\".kibana_-1386441176_praxisrw\" : \"praxisrw\""));
+        Assert.assertTrue(res.getBody().contains(".kibana_-2014056163_kltentrw\" : \"kltentrw\""));
+        Assert.assertTrue(res.getBody().contains("\".kibana_-634608247_abcdef22\" : \"abcdef_2_2\""));
+        Assert.assertTrue(res.getBody().contains("\".kibana_-12345_123456\" : \"__private__\""));
+        Assert.assertFalse(res.getBody().contains(".kibana-6"));
+        Assert.assertFalse(res.getBody().contains("esb-"));
+        Assert.assertFalse(res.getBody().contains("xxx"));
+        Assert.assertFalse(res.getBody().contains(".kibana2"));
+    }
+    
+    @Test
+    public void testRestImpersonation() throws Exception {
+        final Settings settings = Settings.builder()
+                .putList(ConfigConstants.SEARCHGUARD_AUTHCZ_REST_IMPERSONATION_USERS+".worf", "someotherusernotininternalusersfile")
+                .build();
+        setup(Settings.EMPTY, new DynamicSgConfig().setSgConfig("sg_config_rest_impersonation.yml"), settings);
+        final RestHelper rh = nonSslRestHelper();
+        
+        //rest impersonation
+        HttpResponse res = rh.executeGetRequest("/_searchguard/authinfo", new BasicHeader("sg_impersonate_as","someotherusernotininternalusersfile"), encodeBasicHeader("worf", "worf"));
+        Assert.assertEquals(HttpStatus.SC_OK, res.getStatusCode());
+        Assert.assertTrue(res.getBody().contains("name=someotherusernotininternalusersfile"));
+        Assert.assertFalse(res.getBody().contains("worf"));
+    }
 
 }
