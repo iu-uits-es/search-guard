@@ -466,7 +466,9 @@ public final class SearchGuardPlugin extends SearchGuardSSLPlugin implements Clu
     @Override
     public UnaryOperator<RestHandler> getRestHandlerWrapper(final ThreadContext threadContext) {
 
-        if(client || disabled || sslOnly) {
+        if (sslOnly) {
+            return null;
+        } else if(client || disabled) {
             return (rh) -> rh;
         }
 
