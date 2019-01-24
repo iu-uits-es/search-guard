@@ -66,6 +66,10 @@ public abstract class SingleClusterTest extends AbstractSGUnitTest {
         }
     }
     
+    protected void setupSslOnlyMode(Settings nodeOverride) throws Exception {    
+        clusterInfo = clusterHelper.startCluster(minimumSearchGuardSettingsSslOnly(nodeOverride), ClusterConfiguration.DEFAULT);
+    }
+    
     protected RestHelper restHelper() {
         return new RestHelper(clusterInfo, getResourceFolder());
     }

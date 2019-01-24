@@ -667,5 +667,26 @@ public class HttpIntegrationTests extends SingleClusterTest {
         Assert.assertTrue(res.getBody().contains("name=someotherusernotininternalusersfile"));
         Assert.assertFalse(res.getBody().contains("worf"));
     }
+    
+    @Test
+    public void testSslOnlyMode() throws Exception {
+        final Settings settings = Settings.builder()
+                .put(ConfigConstants.SEARCHGUARD_SSL_ONLY, true)
+                .build();
+        setupSslOnlyMode(settings);
+        final RestHelper rh = nonSslRestHelper();
+        
+        HttpResponse res = rh.executeGetRequest("/_searchguard/sslinfo");
+        Assert.assertEquals(HttpStatus.SC_OK, res.getStatusCode());
+        
+        res = rh.executePutRequest("/xyz/_doc/1","{\"a\":5}");
+        Assert.assertEquals(HttpStatus.SC_CREATED, res.getStatusCode());
+        
+        res = rh.executeGetRequest("/_mappings");
+        Assert.assertEquals(HttpStatus.SC_OK, res.getStatusCode());
+        
+        res = rh.executeGetRequest("/_search");
+        Assert.assertEquals(HttpStatus.SC_OK, res.getStatusCode());
+    }
 
 }

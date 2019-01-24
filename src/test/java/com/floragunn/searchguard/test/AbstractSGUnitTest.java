@@ -195,11 +195,11 @@ public abstract class AbstractSGUnitTest {
         }
     }
     
-    protected Settings.Builder minimumSearchGuardSettingsBuilder(int node) {
+    protected Settings.Builder minimumSearchGuardSettingsBuilder(int node, boolean sslOnly) {
         
         final String prefix = getResourceFolder()==null?"":getResourceFolder()+"/";
         
-        return Settings.builder()
+        Settings.Builder builder = Settings.builder()
                 //.put("searchguard.ssl.transport.enabled", true)
                  //.put("searchguard.no_default_init", true)
                 //.put("searchguard.ssl.http.enable_openssl_if_available", false)
@@ -211,16 +211,30 @@ public abstract class AbstractSGUnitTest {
                         FileHelper.getAbsoluteFilePathFromClassPath(prefix+"node-0-keystore.jks"))
                 .put("searchguard.ssl.transport.truststore_filepath",
                         FileHelper.getAbsoluteFilePathFromClassPath(prefix+"truststore.jks"))
-                .put("searchguard.ssl.transport.enforce_hostname_verification", false)
-                .putList("searchguard.authcz.admin_dn", "CN=kirk,OU=client,O=client,l=tEst, C=De");
+                .put("searchguard.ssl.transport.enforce_hostname_verification", false);
+        
+                if(!sslOnly) {
+                    builder.putList("searchguard.authcz.admin_dn", "CN=kirk,OU=client,O=client,l=tEst, C=De");
                 //.put(other==null?Settings.EMPTY:other);
+                }
+                
+        return builder;
     }
     
     protected NodeSettingsSupplier minimumSearchGuardSettings(Settings other) {
         return new NodeSettingsSupplier() {
             @Override
             public Settings get(int i) {
-                return minimumSearchGuardSettingsBuilder(i).put(other).build();
+                return minimumSearchGuardSettingsBuilder(i, false).put(other).build();
+            }
+        };
+    }
+    
+    protected NodeSettingsSupplier minimumSearchGuardSettingsSslOnly(Settings other) {
+        return new NodeSettingsSupplier() {
+            @Override
+            public Settings get(int i) {
+                return minimumSearchGuardSettingsBuilder(i, true).put(other).build();
             }
         };
     }

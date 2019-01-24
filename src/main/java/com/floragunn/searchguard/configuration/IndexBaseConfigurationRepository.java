@@ -66,6 +66,7 @@ import com.floragunn.searchguard.ssl.util.ExceptionUtils;
 import com.floragunn.searchguard.support.ConfigConstants;
 import com.floragunn.searchguard.support.ConfigHelper;
 import com.floragunn.searchguard.support.LicenseHelper;
+import com.floragunn.searchguard.support.SgUtils;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
@@ -460,7 +461,7 @@ public class IndexBaseConfigurationRepository implements ConfigurationRepository
     }
 
     private static String formatDate(long date) {
-        return new SimpleDateFormat("yyyy-MM-dd").format(new Date(date));
+        return new SimpleDateFormat("yyyy-MM-dd", SgUtils.EN_Locale).format(new Date(date));
     }
 
     /**

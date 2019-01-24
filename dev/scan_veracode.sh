@@ -54,11 +54,14 @@ echo "--------------------"
 echo ""
 echo ""
 echo "Check for errors ..."
-set +e
-grep -i error vera.log && (echo "Error executing veracode"; exit -1)
-grep -i denied vera.log && (echo "Access denied for veracode"; exit -1)
+
+echo "$-"
+echo $SHELLOPTS
+
+! grep -i error vera.log || { echo "Veracode error"; exit 1; }
+! grep -i denied vera.log || { echo "Veracode denied"; exit 1; }
+
 echo "No errors"
-set -e
 
 #curl -Ss --fail --compressed -u "$VERA_USER:$VERA_PASSWORD" "https://analysiscenter.veracode.com/api/5.0/beginscan.do" -F "app_id=$APPID" -F "sandbox_id=$SANDBOXID" -F "scan_all_top_level_modules=true" | xmllint --format -
 

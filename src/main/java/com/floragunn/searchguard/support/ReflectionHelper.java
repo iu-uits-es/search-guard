@@ -190,7 +190,8 @@ public class ReflectionHelper {
             final ComplianceIndexingOperationListener impl = (ComplianceIndexingOperationListener) clazz
                     .getConstructor(ComplianceConfig.class, AuditLog.class)
                     .newInstance(complianceConfig, auditlog);
-            addLoadedModule(clazz);
+            //no addLoadedModule(clazz) here because its not a typical module
+            //and it is not loaded in every case/on every node
             return impl;
         } catch (final ClassNotFoundException e) {
             //TODO produce a single warn msg, this here is issued for every index

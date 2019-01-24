@@ -20,6 +20,7 @@ package com.floragunn.searchguard.support;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -29,8 +30,30 @@ import org.apache.logging.log4j.Logger;
 public final class SgUtils {
     
     protected final static Logger log = LogManager.getLogger(SgUtils.class);
+    public static Locale EN_Locale = forEN();
     
     private SgUtils() {
+    }
+    
+    //https://github.com/tonywasher/bc-java/commit/ee160e16aa7fc71330907067c5470e9bf3e6c383
+    //The Legion of the Bouncy Castle Inc
+    private static Locale forEN()
+    {
+        if ("en".equalsIgnoreCase(Locale.getDefault().getLanguage()))
+        {
+            return Locale.getDefault();
+        }
+
+        Locale[] locales = Locale.getAvailableLocales();
+        for (int i = 0; i != locales.length; i++)
+        {
+            if ("en".equalsIgnoreCase(locales[i].getLanguage()))
+            {
+                return locales[i];
+            }
+        }
+
+        return Locale.getDefault();
     }
 
     public static String evalMap(final Map<String,Set<String>> map, final String index) {

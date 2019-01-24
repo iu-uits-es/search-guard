@@ -38,6 +38,7 @@ import org.junit.Test;
 
 import com.floragunn.searchguard.configuration.SearchGuardLicense;
 import com.floragunn.searchguard.configuration.SearchGuardLicense.Feature;
+import com.floragunn.searchguard.support.SgUtils;
 import com.floragunn.searchguard.test.DynamicSgConfig;
 import com.floragunn.searchguard.test.SingleClusterTest;
 import com.floragunn.searchguard.test.helper.file.FileHelper;
@@ -97,7 +98,7 @@ public class LicenseTests extends SingleClusterTest {
     @Test
     public void testComplianceLicense() throws Exception {
       
-        final String now = new SimpleDateFormat("yyyy-MM-dd").format(new Date());
+        final String now = new SimpleDateFormat("yyyy-MM-dd", SgUtils.EN_Locale).format(new Date());
         SearchGuardLicense license = SearchGuardLicense.createTrialLicense(now, cs, "");
         
         Assert.assertTrue(license.hasFeature(Feature.COMPLIANCE));
